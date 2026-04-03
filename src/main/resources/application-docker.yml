@@ -1,0 +1,38 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# Docker profile — loaded when SPRING_PROFILES_ACTIVE=docker (set in .env).
+# Overrides only the properties that differ between local dev and Docker Compose.
+# Every other setting is inherited from application.yml.
+#
+# RULE: Never use 'localhost' here. Always use Docker Compose service names.
+# ─────────────────────────────────────────────────────────────────────────────
+
+spring:
+
+  # ── DataSource ────────────────────────────────────────────────────────────
+  # Service name 'postgres' resolves inside the wms-net bridge network.
+  datasource:
+    url: jdbc:postgresql://postgres:5432/${POSTGRES_DB:wms}
+    username: ${DB_USERNAME:wms}
+    password: ${DB_PASSWORD:wms}
+
+  # ── Redis ─────────────────────────────────────────────────────────────────
+  data:
+    redis:
+      host: redis                   # service name from docker-compose.yml
+      port: 6379
+      password: ${REDIS_PASSWORD:}
+
+  # ── Kafka ─────────────────────────────────────────────────────────────────
+  # Uses the PLAINTEXT://kafka:9092 internal listener (not the host-accessible 9093).
+  kafka:
+    bootstrap-servers: kafka:9092
+
+# ── Logging — quieter in Docker; structured output is easier to grep ──────────
+logging:
+  level:
+    root: INFO
+    com.example.wms: INFO
+    org.flywaydb: INFO              # log migrations so startup issues are obvious
+    org.hibernate.SQL: WARN
+    org.springframework.security: WARN
+    org.apache.kafka: WARN

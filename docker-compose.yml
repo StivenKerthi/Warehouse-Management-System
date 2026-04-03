@@ -1,0 +1,175 @@
+services:
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # PostgreSQL 16
+  # ───────────────────────────────────────────────────────────────────────────
+  postgres:
+    image: postgres:16-alpine
+    container_name: wms-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB:       ${POSTGRES_DB}
+      POSTGRES_USER:     ${DB_USERNAME}
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USERNAME} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    networks:
+      - wms-net
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Redis 7
+  # ───────────────────────────────────────────────────────────────────────────
+  redis:
+    image: redis:7.2-alpine
+    container_name: wms-redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --save 60 1
+      --loglevel warning
+      ${REDIS_PASSWORD:+--requirepass ${REDIS_PASSWORD}}
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    networks:
+      - wms-net
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Zookeeper (required by Kafka < 4.x KRaft mode is not yet GA in most images)
+  # ───────────────────────────────────────────────────────────────────────────
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.6.1
+    container_name: wms-zookeeper
+    restart: unless-stopped
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME:   2000
+      ZOOKEEPER_SYNC_LIMIT:  2
+    volumes:
+      - zookeeper_data:/var/lib/zookeeper/data
+      - zookeeper_log:/var/lib/zookeeper/log
+    healthcheck:
+      test: ["CMD", "bash", "-c", "cub zk-ready localhost:2181 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+      start_period: 20s
+    networks:
+      - wms-net
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # Kafka 7.6.1 (Confluent)
+  #
+  # Two listener sets:
+  #   PLAINTEXT        — kafka:9092  — used by the app container (service name)
+  #   PLAINTEXT_HOST   — localhost:9093 — used by tools on the host machine
+  # ───────────────────────────────────────────────────────────────────────────
+  kafka:
+    image: confluentinc/cp-kafka:7.6.1
+    container_name: wms-kafka
+    restart: unless-stopped
+    depends_on:
+      zookeeper:
+        condition: service_healthy
+    environment:
+      KAFKA_BROKER_ID:                        1
+      KAFKA_ZOOKEEPER_CONNECT:                zookeeper:2181
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP:   PLAINTEXT:PLAINTEXT,PLAINTEXT_HOST:PLAINTEXT
+      KAFKA_ADVERTISED_LISTENERS:             PLAINTEXT://kafka:9092,PLAINTEXT_HOST://localhost:9093
+      KAFKA_LISTENERS:                        PLAINTEXT://0.0.0.0:9092,PLAINTEXT_HOST://0.0.0.0:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME:       PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      KAFKA_AUTO_CREATE_TOPICS_ENABLE:        "true"
+      # Pre-create application topics on startup
+      KAFKA_CREATE_TOPICS: >
+        warehouse.order.fulfilled:1:1,
+        warehouse.order.fulfilled.dlq:1:1
+    ports:
+      - "${KAFKA_PORT:-9093}:9093"     # host-accessible port (not 9092 — that's internal)
+    volumes:
+      - kafka_data:/var/lib/kafka/data
+    healthcheck:
+      # Verify the broker is accepting connections on the internal listener
+      test: ["CMD-SHELL",
+             "kafka-broker-api-versions --bootstrap-server localhost:9092 > /dev/null 2>&1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
+    networks:
+      - wms-net
+
+  # ───────────────────────────────────────────────────────────────────────────
+  # WMS Application
+  # ───────────────────────────────────────────────────────────────────────────
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: runtime
+    image: wms-app:latest
+    container_name: wms-app
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      kafka:
+        condition: service_healthy
+    environment:
+      SPRING_PROFILES_ACTIVE:      docker
+      # DataSource
+      DB_USERNAME:                 ${DB_USERNAME}
+      DB_PASSWORD:                 ${DB_PASSWORD}
+      POSTGRES_DB:                 ${POSTGRES_DB}
+      # Redis
+      REDIS_PASSWORD:              ${REDIS_PASSWORD:-}
+      # Kafka
+      KAFKA_BOOTSTRAP_SERVERS:     kafka:9092
+      # JWT
+      JWT_SECRET:                  ${JWT_SECRET}
+      JWT_EXPIRATION_MS:           ${JWT_EXPIRATION_MS:-86400000}
+      # JVM / container
+      JAVA_TOOL_OPTIONS:           "-XX:+UseContainerSupport -XX:MaxRAMPercentage=75.0"
+    ports:
+      - "${SERVER_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL",
+             "wget -qO- http://localhost:8080/actuator/health 2>/dev/null | grep -q '\"status\":\"UP\"' || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 5
+      start_period: 60s          # Spring Boot + Flyway + Kafka consumer need time to start
+    networks:
+      - wms-net
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Networks & Volumes
+# ─────────────────────────────────────────────────────────────────────────────
+networks:
+  wms-net:
+    driver: bridge
+
+volumes:
+  postgres_data:
+  redis_data:
+  kafka_data:
+  zookeeper_data:
+  zookeeper_log:

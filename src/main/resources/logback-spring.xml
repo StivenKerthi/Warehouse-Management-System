@@ -1,0 +1,102 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration scan="false">
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         Log pattern — single line, MDC fields always present.
+
+         Fields:
+           %d              — timestamp (ISO-like, millis precision)
+           [%15.15t]       — thread name, padded/truncated to 15 chars
+           %-5p            — log level, left-padded to 5 chars
+           %40.40logger    — logger name, truncated from left to 40 chars
+           cid             — correlationId from MDC  (set by CorrelationIdFilter)
+           usr             — username from MDC        (set by JwtFilter after TASK-011)
+           %msg%n          — message + newline
+         ══════════════════════════════════════════════════════════════════════ -->
+    <property name="LOG_PATTERN_PLAIN"
+              value="%d{yyyy-MM-dd HH:mm:ss.SSS} [%15.15t] %-5p %40.40logger{40} [cid=%X{correlationId:-none}] [usr=%X{username:-anon}] - %msg%n"/>
+
+    <!-- Coloured variant for local dev — uses Spring Boot's %clr() extension -->
+    <property name="LOG_PATTERN_COLOR"
+              value="%clr(%d{yyyy-MM-dd HH:mm:ss.SSS}){faint} %clr([%15.15t]){faint} %clr(%-5p) %clr(%40.40logger{40}){cyan} %clr([cid=%X{correlationId:-none}]){yellow} %clr([usr=%X{username:-anon}]){yellow} - %msg%n"/>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         LOCAL DEV profile (default — anything that is NOT docker)
+         Coloured console, DEBUG for application code, synchronous (easier to
+         follow in IDE run windows).
+         ══════════════════════════════════════════════════════════════════════ -->
+    <springProfile name="!docker">
+
+        <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+                <pattern>${LOG_PATTERN_COLOR}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+
+        <logger name="com.example.wms" level="DEBUG" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+        </logger>
+
+        <!-- Show Flyway migration steps during local dev -->
+        <logger name="org.flywaydb" level="INFO" additivity="false">
+            <appender-ref ref="CONSOLE"/>
+        </logger>
+
+        <root level="INFO">
+            <appender-ref ref="CONSOLE"/>
+        </root>
+
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         DOCKER profile
+         Plain-text (no ANSI codes — Docker/log-aggregators don't render them).
+         Wrapped in an AsyncAppender so log I/O never blocks the request thread.
+         ══════════════════════════════════════════════════════════════════════ -->
+    <springProfile name="docker">
+
+        <appender name="CONSOLE_PLAIN" class="ch.qos.logback.core.ConsoleAppender">
+            <encoder class="ch.qos.logback.classic.encoder.PatternLayoutEncoder">
+                <pattern>${LOG_PATTERN_PLAIN}</pattern>
+                <charset>UTF-8</charset>
+            </encoder>
+        </appender>
+
+        <!-- AsyncAppender — offloads log I/O to a background thread.
+             queueSize 512 is plenty for a single-instance app.
+             discardingThreshold 0 — never discard WARN/ERROR even under load. -->
+        <appender name="ASYNC_CONSOLE" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>512</queueSize>
+            <discardingThreshold>0</discardingThreshold>
+            <includeCallerData>false</includeCallerData>
+            <appender-ref ref="CONSOLE_PLAIN"/>
+        </appender>
+
+        <logger name="com.example.wms" level="INFO" additivity="false">
+            <appender-ref ref="ASYNC_CONSOLE"/>
+        </logger>
+
+        <logger name="org.flywaydb" level="INFO" additivity="false">
+            <appender-ref ref="ASYNC_CONSOLE"/>
+        </logger>
+
+        <root level="INFO">
+            <appender-ref ref="ASYNC_CONSOLE"/>
+        </root>
+
+    </springProfile>
+
+    <!-- ══════════════════════════════════════════════════════════════════════
+         Noise suppression — applies across all profiles
+         ══════════════════════════════════════════════════════════════════════ -->
+    <logger name="org.hibernate.SQL"                              level="WARN"/>
+    <logger name="org.hibernate.orm.jdbc.bind"                    level="WARN"/>
+    <logger name="org.springframework.security"                   level="WARN"/>
+    <logger name="org.springframework.web"                        level="WARN"/>
+    <logger name="org.apache.kafka"                               level="WARN"/>
+    <logger name="org.springframework.kafka"                      level="WARN"/>
+    <logger name="com.zaxxer.hikari"                              level="WARN"/>
+    <logger name="io.lettuce"                                     level="WARN"/>
+
+</configuration>

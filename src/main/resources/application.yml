@@ -1,0 +1,167 @@
+spring:
+  application:
+    name: warehouse-management
+
+  # ── Jackson ────────────────────────────────────────────────────────────────
+  # Consistent JSON serialisation across the entire application.
+  jackson:
+    default-property-inclusion: non_null        # omit null fields from responses
+    serialization:
+      write-dates-as-timestamps: false          # ISO-8601 strings, not epoch millis
+      write-durations-as-timestamps: false
+    deserialization:
+      fail-on-unknown-properties: false         # tolerate extra fields in request bodies
+    time-zone: UTC
+
+  # ── DataSource / HikariCP ──────────────────────────────────────────────────
+  datasource:
+    url: jdbc:postgresql://localhost:5432/${POSTGRES_DB:wms}
+    username: ${DB_USERNAME:wms}
+    password: ${DB_PASSWORD:wms}
+    driver-class-name: org.postgresql.Driver
+    hikari:
+      pool-name: wms-hikari-pool
+      maximum-pool-size: 10
+      minimum-idle: 2
+      idle-timeout: 30000           # ms — remove idle connections after 30 s
+      connection-timeout: 30000     # ms — fail-fast if no connection available
+      max-lifetime: 1800000         # ms — recycle connections every 30 min (< PostgreSQL idle timeout)
+      auto-commit: false            # Spring @Transactional manages commits
+
+  # ── JPA / Hibernate ───────────────────────────────────────────────────────
+  jpa:
+    open-in-view: false             # CRITICAL — prevents lazy-load queries leaking into the web layer
+    hibernate:
+      ddl-auto: validate            # Flyway owns the schema; Hibernate only validates
+    show-sql: false
+    properties:
+      hibernate:
+        dialect: org.hibernate.dialect.PostgreSQLDialect
+        format_sql: false
+        default_schema: public
+        jdbc:
+          time_zone: UTC            # all TIMESTAMP columns written/read as UTC
+          batch_size: 25            # enable JDBC batching for bulk inserts/updates
+        order_inserts: true
+        order_updates: true
+        generate_statistics: false
+
+  # ── Flyway ────────────────────────────────────────────────────────────────
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: false
+    validate-on-migrate: true       # abort startup if checksums don't match
+    out-of-order: false             # migrations must run in strict version order
+
+  # ── Redis / Lettuce ───────────────────────────────────────────────────────
+  data:
+    redis:
+      host: ${REDIS_HOST:localhost}
+      port: ${REDIS_PORT:6379}
+      password: ${REDIS_PASSWORD:}
+      lettuce:
+        pool:
+          enabled: true             # MUST be true for pooling to activate
+          max-active: 8
+          max-idle: 4
+          min-idle: 1
+          max-wait: 2000ms          # fail-fast if pool exhausted
+
+  # ── Kafka ─────────────────────────────────────────────────────────────────
+  kafka:
+    bootstrap-servers: ${KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+      acks: all                     # wait for all in-sync replicas (strongest guarantee)
+      retries: 3
+      properties:
+        enable.idempotence: true    # exactly-once producer semantics
+        max.in.flight.requests.per.connection: 5
+        delivery.timeout.ms: 120000
+    consumer:
+      group-id: wms-fulfillment-group
+      auto-offset-reset: earliest
+      enable-auto-commit: false     # manual ACK via AckMode.MANUAL
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: "com.example.wms.messaging.dto"
+        spring.json.use.type.headers: false
+        max.poll.interval.ms: 300000
+        session.timeout.ms: 30000
+    listener:
+      ack-mode: MANUAL
+
+  # ── Spring Cache → Redis ───────────────────────────────────────────────────
+  cache:
+    type: redis
+    redis:
+      time-to-live: 300000          # 5-minute default TTL (ms); overridden per cache name in RedisConfig
+
+  # ── Suppress Whitelabel error page ────────────────────────────────────────
+  web:
+    resources:
+      add-mappings: false           # no static resource handler; pure REST API
+
+# ── Server ────────────────────────────────────────────────────────────────────
+server:
+  port: ${SERVER_PORT:8080}
+  error:
+    whitelabel:
+      enabled: false                # GlobalExceptionHandler owns all error responses
+  servlet:
+    context-path: /
+  compression:
+    enabled: true
+    mime-types: application/json,text/csv
+    min-response-size: 2048
+
+# ── Application-specific properties ───────────────────────────────────────────
+app:
+  jwt:
+    secret: ${JWT_SECRET:change-me-in-production-must-be-at-least-256-bits-long-secret-key!!}
+    expiration-ms: ${JWT_EXPIRATION_MS:86400000}        # 24 hours
+
+  delivery:
+    # Default window for eligible delivery date calculation (CLAUDE.md business rule).
+    # Configurable at runtime via system_config table (key: delivery_window_days).
+    # Hard ceiling enforced in code: max 30 days regardless of DB value.
+    window-days: 14
+
+  kafka:
+    topics:
+      fulfillment: warehouse.order.fulfilled
+      fulfillment-dlq: warehouse.order.fulfilled.dlq
+    consumer:
+      max-retry-attempts: 3         # after 3 failures, route to DLQ
+
+  idempotency:
+    ttl-hours: 24                   # Redis TTL for idempotency keys (order submit)
+
+# ── Springdoc / Swagger UI ─────────────────────────────────────────────────────
+springdoc:
+  swagger-ui:
+    path: /swagger-ui.html
+    operations-sorter: alpha
+    tags-sorter: alpha
+    display-request-duration: true
+  api-docs:
+    path: /v3/api-docs
+  show-actuator: false              # keep /actuator out of the public API docs
+
+# ── Actuator — minimal exposure (Docker health check only) ────────────────────
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health
+      base-path: /actuator
+  endpoint:
+    health:
+      show-details: never           # never leak internal state to unauthenticated callers
+
+# ── Logging ───────────────────────────────────────────────────────────────────
+logging:
+  config: classpath:logback-spring.xml
