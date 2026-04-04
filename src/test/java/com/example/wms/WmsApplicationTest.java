@@ -14,7 +14,8 @@ import org.springframework.test.context.TestPropertySource;
 @SpringBootTest
 @TestPropertySource(properties = {
         // ── In-memory DB (H2 replaces PostgreSQL) ──────────────────────────
-        "spring.datasource.url=jdbc:h2:mem:wms-test;DB_CLOSE_DELAY=-1;MODE=PostgreSQL",
+        "spring.datasource.url=jdbc:h2:mem:wms-test;DB_CLOSE_DELAY=-1;MODE=PostgreSQL;" +
+                "INIT=CREATE DOMAIN IF NOT EXISTS user_role AS VARCHAR(50)",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",

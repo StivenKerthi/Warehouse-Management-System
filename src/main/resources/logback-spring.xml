@@ -1,6 +1,10 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <configuration scan="false">
 
+    <!-- Register Spring Boot's %clr() color converter -->
+    <conversionRule conversionWord="clr"
+                    converterClass="org.springframework.boot.logging.logback.ColorConverter"/>
+
     <!-- ══════════════════════════════════════════════════════════════════════
          Log pattern — single line, MDC fields always present.
 
