@@ -42,10 +42,12 @@ import org.springframework.data.domain.Pageable;
  *   <li>{@link #updateOrder} — replaces items when order is in CREATED or DECLINED status</li>
  * </ul>
  *
- * <h2>Added in later tasks</h2>
+ * <h2>Manager operations (TASK-032)</h2>
  * <ul>
- *   <li>TASK-028: {@code cancelOrder} — transition to CANCELED</li>
- *   <li>TASK-032: {@code approveOrder}, {@code declineOrder} — manager operations</li>
+ *   <li>{@link #approveOrder} — AWAITING_APPROVAL → APPROVED</li>
+ *   <li>{@link #declineOrder} — AWAITING_APPROVAL → DECLINED (persists decline reason)</li>
+ *   <li>{@link #listManagerOrders} — paginated all-orders view (optional status filter)</li>
+ *   <li>{@link #getManagerOrder} — fetch any order by ID (no ownership restriction)</li>
  * </ul>
  *
  * <h2>Status change rule</h2>
@@ -340,6 +342,101 @@ public class OrderService {
 
         log.info("Order '{}' cancelled by client '{}'",
                 order.getOrderNumber(), order.getClient().getUsername());
+    }
+
+    // -------------------------------------------------------------------------
+    // Manager operations (TASK-032)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Approves an order, transitioning it from {@code AWAITING_APPROVAL} → {@code APPROVED}.
+     *
+     * <p>The transition is validated by {@link OrderStateMachine} — any order not currently
+     * in {@code AWAITING_APPROVAL} will cause a {@link com.example.wms.common.exception.StateMachineException}
+     * (HTTP 409). The SLA report cache is evicted automatically by the state machine on
+     * every status change.
+     *
+     * @param orderId         the UUID of the order to approve
+     * @param managerUsername the username of the authenticated manager performing the action
+     * @return the updated order DTO reflecting {@code APPROVED} status
+     * @throws EntityNotFoundException if the order does not exist
+     * @throws com.example.wms.common.exception.StateMachineException (409) if the order is
+     *         not in {@code AWAITING_APPROVAL}
+     */
+    @Transactional
+    public OrderDto approveOrder(UUID orderId, String managerUsername) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
+
+        orderStateMachine.transition(order, OrderStatus.APPROVED, managerUsername, null);
+
+        log.info("Order '{}' approved by manager '{}'", order.getOrderNumber(), managerUsername);
+
+        return OrderDto.from(order);
+    }
+
+    /**
+     * Declines an order, transitioning it from {@code AWAITING_APPROVAL} → {@code DECLINED}.
+     *
+     * <p>The {@code reason} is persisted on the order entity and must be non-blank —
+     * the state machine enforces this and throws {@link com.example.wms.common.exception.BusinessException}
+     * (HTTP 422) if absent. The SLA report cache is evicted automatically.
+     *
+     * <p>A declined order may be updated and re-submitted by the client (unlimited retries).
+     *
+     * @param orderId         the UUID of the order to decline
+     * @param managerUsername the username of the authenticated manager performing the action
+     * @param reason          the human-readable reason for declining (must not be blank)
+     * @return the updated order DTO reflecting {@code DECLINED} status with the reason set
+     * @throws EntityNotFoundException if the order does not exist
+     * @throws com.example.wms.common.exception.StateMachineException (409) if the order is
+     *         not in {@code AWAITING_APPROVAL}
+     * @throws com.example.wms.common.exception.BusinessException (422) if {@code reason} is blank
+     */
+    @Transactional
+    public OrderDto declineOrder(UUID orderId, String managerUsername, String reason) {
+        Order order = orderRepository.findById(orderId)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
+
+        orderStateMachine.transition(order, OrderStatus.DECLINED, managerUsername, reason);
+
+        log.info("Order '{}' declined by manager '{}' — reason: {}",
+                order.getOrderNumber(), managerUsername, reason);
+
+        return OrderDto.from(order);
+    }
+
+    /**
+     * Returns a paginated list of all orders, optionally filtered by status.
+     *
+     * <p>Used by the manager dashboard. When no status filter is provided, all orders
+     * across all statuses are returned sorted by submission time (newest first).
+     *
+     * @param status   optional status filter; {@code null} returns all statuses
+     * @param pageable pagination and sort parameters
+     * @return a page of slim order summaries
+     */
+    public Page<OrderSummaryDto> listManagerOrders(@Nullable OrderStatus status, Pageable pageable) {
+        Page<Order> page = (status != null)
+                ? orderRepository.findByStatusOrderBySubmittedAtDesc(status, pageable)
+                : orderRepository.findAll(pageable);
+        return page.map(OrderSummaryDto::from);
+    }
+
+    /**
+     * Returns the full detail view of any order by ID (no ownership restriction).
+     *
+     * <p>Used by the manager — a manager may view any order regardless of which
+     * client owns it.
+     *
+     * @param orderId the UUID of the order
+     * @return the full order DTO including all line items
+     * @throws EntityNotFoundException if the order does not exist
+     */
+    public OrderDto getManagerOrder(UUID orderId) {
+        return orderRepository.findById(orderId)
+                .map(OrderDto::from)
+                .orElseThrow(() -> new EntityNotFoundException("Order not found: " + orderId));
     }
 
     // -------------------------------------------------------------------------
