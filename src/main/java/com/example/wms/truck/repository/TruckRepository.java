@@ -3,6 +3,7 @@ package com.example.wms.truck.repository;
 import com.example.wms.truck.model.Truck;
 import org.springframework.data.jpa.repository.JpaRepository;
 
+import java.util.List;
 import java.util.UUID;
 
 public interface TruckRepository extends JpaRepository<Truck, UUID> {
@@ -14,4 +15,7 @@ public interface TruckRepository extends JpaRepository<Truck, UUID> {
     boolean existsByLicensePlate(String licensePlate);
 
     boolean existsByLicensePlateAndIdNot(String licensePlate, UUID id);
+
+    /** Returns all trucks that have not been soft-deleted. */
+    List<Truck> findAllByActiveTrue();
 }

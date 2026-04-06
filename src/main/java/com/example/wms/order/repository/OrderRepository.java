@@ -138,4 +138,28 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
      * specified status. Useful for lightweight guard checks without loading the entity.
      */
     boolean existsByClientIdAndStatus(UUID clientId, OrderStatus status);
+
+    // -------------------------------------------------------------------------
+    // Delivery scheduling — order + items loaded in a single query
+    // -------------------------------------------------------------------------
+
+    /**
+     * Fetches an order together with its line items and each item's inventory
+     * entry in a single SQL query (JOIN FETCH).
+     *
+     * <p>Used by {@code EligibleDayCalculator} to compute the order's total
+     * required delivery volume without triggering N+1 lazy-load queries.
+     * {@code DISTINCT} prevents Hibernate from returning duplicate {@code Order}
+     * rows caused by the one-to-many join.
+     *
+     * @param id the order UUID
+     * @return the order with {@code orderItems} and each item's {@code inventoryItem} initialised
+     */
+    @Query("""
+            SELECT DISTINCT o FROM Order o
+            JOIN FETCH o.orderItems oi
+            JOIN FETCH oi.inventoryItem
+            WHERE o.id = :id
+            """)
+    Optional<Order> findByIdWithItems(@Param("id") UUID id);
 }
