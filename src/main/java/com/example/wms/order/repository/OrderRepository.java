@@ -9,6 +9,7 @@ import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
 
 import java.time.LocalDate;
+import java.time.OffsetDateTime;
 import java.util.List;
 import java.util.Optional;
 import java.util.UUID;
@@ -128,6 +129,36 @@ public interface OrderRepository extends JpaRepository<Order, UUID> {
                       AND  d.delivery_date <= :date
                     """)
     List<Order> findReadyToFulfill(@Param("date") LocalDate date);
+
+    // -------------------------------------------------------------------------
+    // Reporting — order counts per status (SLA report)
+    // -------------------------------------------------------------------------
+
+    /**
+     * Returns {@code [status, count]} pairs for all orders, with no date filter.
+     * Used by {@code ReportingService} when no date range is specified.
+     */
+    @Query(nativeQuery = true,
+           value = "SELECT status, COUNT(*) AS cnt FROM orders GROUP BY status")
+    List<Object[]> countByStatusGrouped();
+
+    /**
+     * Returns {@code [status, count]} pairs for orders created within the given
+     * half-open interval {@code [from, to)}.
+     *
+     * @param from inclusive lower bound (start of day UTC)
+     * @param to   exclusive upper bound (start of day after the requested end date)
+     */
+    @Query(nativeQuery = true,
+           value = """
+                   SELECT status, COUNT(*) AS cnt
+                   FROM   orders
+                   WHERE  created_at >= :from
+                     AND  created_at <  :to
+                   GROUP  BY status
+                   """)
+    List<Object[]> countByStatusGroupedInRange(@Param("from") OffsetDateTime from,
+                                               @Param("to")   OffsetDateTime to);
 
     // -------------------------------------------------------------------------
     // Existence checks (used by OrderService to detect conflicts)

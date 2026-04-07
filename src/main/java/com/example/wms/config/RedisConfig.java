@@ -42,9 +42,10 @@ public class RedisConfig {
         return RedisCacheManager.builder(connectionFactory)
                 .cacheDefaults(defaultConfig)
                 .withInitialCacheConfigurations(Map.of(
-                        "system-config",      defaultConfig.entryTtl(TTL_5_MIN),
-                        "delivery-eligible",  defaultConfig.entryTtl(TTL_5_MIN),
-                        "sla-report",         defaultConfig.entryTtl(TTL_5_MIN)
+                        "system-config",       defaultConfig.entryTtl(TTL_5_MIN),
+                        "delivery-eligible",   defaultConfig.entryTtl(TTL_5_MIN),
+                        "sla-report",          defaultConfig.entryTtl(TTL_5_MIN),
+                        "throughput-report",   defaultConfig.entryTtl(TTL_5_MIN)
                 ))
                 .build();
     }
